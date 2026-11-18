@@ -4,13 +4,13 @@ from rest_framework.generics import ListCreateAPIView,RetrieveUpdateDestroyAPIVi
 
 from .models import Project,Task
 
-from .serializers import ProjectSerializer
+from .serializers import Projectserializer
 
 from authentication.models import Profile
 
 from .models import AssignedProject
 
-from .serializers import AssignedProjectSerializer
+from .serializers import AssignedProjectserializer
 
 from .serializers import TaskSerializer
 
@@ -24,6 +24,12 @@ from django.db import transaction
 
 from planner.paginations import CustomPagination
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from authentication.permissions import IsAdmin,IsCoordinator,IsDeveloper
+
+from rest_framework.permissions import IsAuthenticated
+
 # Create your views here.
 
 class ProjectListCreateView(ListCreateAPIView):
@@ -32,7 +38,25 @@ class ProjectListCreateView(ListCreateAPIView):
 
     queryset = Project.objects.filter(active_status=True)
 
-    serializer_class = ProjectSerializer
+    serializer_class = Projectserializer
+
+    http_method_names = ['get', 'post']
+
+    permission_classes = [JWTAuthentication]
+
+    def get_permissions(self):
+
+        permission = []
+
+        if self.request.method in ['POST']:
+
+            permission = [IsAdmin]
+
+        else:
+
+            permission = [IsAuthenticated]
+
+        return [permission() for permission in permission]
 
 class ProjectRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
@@ -40,7 +64,25 @@ class ProjectRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
     queryset = Project.objects.filter(active_status=True)
 
-    serializer_class = ProjectSerializer
+    serializer_class = Projectserializer
+
+    http_method_names = ['get', 'patch', 'delete']
+
+    permission_classes = [JWTAuthentication]
+    
+    def get_permissions(self):
+    
+        permission = []
+    
+        if self.request.method in ['PATCH','DELETE']:
+    
+            permission = [IsAdmin]
+    
+        else:
+    
+            permission = [IsAuthenticated]
+    
+        return [permission() for permission in permission]
 
     def perform_destroy(self, instance):
 
@@ -49,12 +91,30 @@ class ProjectRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
         instance.save()
 
 class AssignedProjectListCreateView(ListCreateAPIView):
-
+    
     pagination_class = CustomPagination
 
     queryset = AssignedProject.objects.filter(active_status=True).select_related('project','coordinator').prefetch_related('developers')
 
-    serializer_class = AssignedProjectSerializer
+    serializer_class = AssignedProjectserializer
+
+    http_method_names = ['get', 'post']
+
+    permission_classes = [JWTAuthentication]
+    
+    def get_permissions(self):
+    
+        permission = []
+    
+        if self.request.method in ['POST']:
+    
+            permission = [IsAdmin]
+    
+        else:
+    
+            permission = [IsAuthenticated]
+    
+        return [permission() for permission in permission]
 
 class AssignedProjectRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
@@ -62,7 +122,25 @@ class AssignedProjectRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
     queryset = AssignedProject.objects.filter(active_status=True)
 
-    serializer_class = AssignedProjectSerializer
+    serializer_class = AssignedProjectserializer
+
+    http_method_names = ['get', 'patch', 'delete']
+
+    permission_classes = [JWTAuthentication]
+
+    def get_permissions(self):
+
+        permission = []
+
+        if self.request.method in ['PATCH','DELETE']:
+
+            permission = [IsAdmin]
+
+        else:
+
+            permission = [IsAuthenticated]
+
+        return [permission() for permission in permission]
 
     def perform_destroy(self, instance):
 
@@ -78,21 +156,39 @@ class TaskListCreateView(ListCreateAPIView):
 
         uuid = self.request.query_params.get('project')
 
+        # Task.objects.filter(assigned_project__uuid=uuid)
+
         if uuid:
 
-            return Task.objects.filter(
-                assigned_project__uuid=uuid,
-                active_status=True,
-            ).select_related(
-                'assigned_project',
-                'assigned_to',
-            ).order_by('pk')
+            assigned_project = AssignedProject.objects.get(uuid=uuid)
 
-        return Task.objects.all().order_by('pk')
+            # tasks = assigned_project.task_set.all()   reverse lookup without related_name
+            
+            tasks = assigned_project.assigned_tasks.filter(active_status=True).select_related('assigned_project','assigned_to')
 
+            return tasks
+
+        return Task.objects.all()
 
     serializer_class = TaskSerializer
 
+    http_method_names = ['get', 'post']
+
+    permission_classes = [JWTAuthentication]
+
+    def get_permissions(self):
+
+        permission = []
+
+        if self.request.method in ['POST']:
+
+            permission = [IsCoordinator]
+
+        else:
+
+            permission = [IsAuthenticated]
+
+        return [permission() for permission in permission]
 
 class TaskRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
@@ -102,6 +198,24 @@ class TaskRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
     serializer_class = TaskSerializer
 
+    http_method_names = ['get', 'patch', 'delete']
+
+    permission_classes = [JWTAuthentication]
+
+    def get_permissions(self):
+
+        permission = []
+
+        if self.request.method in ['PATCH','DELETE']:
+
+            permission = [IsCoordinator]
+
+        else:
+
+            permission = [IsAuthenticated]
+
+        return [permission() for permission in permission]
+
     def perform_destroy(self, instance):
 
         instance.active_status = False
@@ -110,21 +224,35 @@ class TaskRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
 class TaskCreateWithAI(APIView):
 
+    http_method_names = ['post']
+    
+    permission_classes = [JWTAuthentication]
+
+    def get_permissions(self):
+
+        permission = []
+
+        if self.request.method in ['POST']:
+
+            permission = [IsCoordinator]
+
+        return [permission() for permission in permission]
+
     def post(self,request,*args,**kwargs):
 
         uuid = kwargs.get('uuid')
 
         try:
 
-            assigned_projects = AssignedProject.objects.get(uuid=uuid)
-
-            result = generate_tasks(assigned_projects)
+            assigned_project = AssignedProject.objects.get(uuid=uuid)
+    
+            result = generate_tasks(assigned_project)
 
             tasks = [Task(title=task.title,
-                    description=task.description,
-                    assigned_project=assigned_projects,
-                    assigned_to_id=task.developer_id,
-                    priority=task.priority) for task in result.tasks]
+                      description=task.description,
+                      assigned_project=assigned_project,
+                      assigned_to_id=task.developer_id,
+                      priority=task.priority) for task in result.tasks]
 
             with transaction.atomic():
 
